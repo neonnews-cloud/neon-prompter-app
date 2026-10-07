@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Neon News Prompter</title>
+<meta name="theme-color" content="#081636">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-512.png">
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600&family=Playfair+Display:wght@500&display=swap" rel="stylesheet">
+<style>
+:root{ --cyan:#69E8FF; --pink:#FF5CCF; --violet:#8D63FF; --text:#F5F7FB; --muted:#A9B0D6; --line:rgba(141,99,255,.28); --ink:#0c1030; color-scheme:dark; }
+*{ box-sizing:border-box; }
+html,body{ height:100%; margin:0; }
+body{ background:#050a1f; color:var(--text); font-family:"Barlow","Segoe UI",Arial,sans-serif; }
+button,select,textarea{ font:inherit; color:inherit; }
+.btn{ border:none; border-radius:999px; padding:9px 18px; cursor:pointer; font-weight:600; background:linear-gradient(90deg,var(--cyan),var(--violet) 55%,var(--pink)); color:#0a0b24; }
+.btn.ghost{ background:transparent; color:var(--text); border:1px solid var(--line); font-weight:500; }
+#setup{ max-width:900px; margin:0 auto; padding:30px 20px; }
+#setup h1{ font-family:"Playfair Display",Georgia,serif; font-weight:500; margin:0 0 6px; }
+#setup p{ color:var(--muted); margin:0 0 14px; }
+#src{ width:100%; min-height:60vh; background:var(--ink); border:1px solid var(--line); border-radius:12px; padding:16px; font-size:16px; line-height:1.6; }
+.row{ display:flex; gap:10px; margin-top:12px; flex-wrap:wrap; }
+.prompter{ position:fixed; inset:0; display:flex; flex-direction:column; }
+.prompter[hidden], #setup[hidden]{ display:none; }
+.pctl{ display:flex; flex-wrap:wrap; align-items:center; gap:14px; padding:10px 18px; border-bottom:1px solid var(--line); background:#0a1030; font-size:14px; }
+.pctl label{ display:flex; align-items:center; gap:8px; color:var(--muted); }
+#pscroll{ flex:1; overflow-y:auto; padding:30vh 8vw 70vh; }
+#ptext{ font-weight:500; line-height:1.45; white-space:pre-wrap; max-width:1100px; margin:0 auto; }
+#ptext .h{ display:block; font-family:"Playfair Display",Georgia,serif; color:var(--pink); margin-top:1.2em; }
+#ptext .w{ cursor:pointer; border-radius:4px; }
+#ptext .w.read{ opacity:.42; }
+#ptext .w.cur{ background:rgba(105,232,255,.18); box-shadow:0 2px 0 var(--cyan); }
+#voiceBtn[aria-pressed="true"]{ background:linear-gradient(90deg,var(--pink),var(--violet)); color:#0a0b24; border-color:transparent; }
+.heard{ flex-basis:100%; color:var(--muted); font-size:13px; min-height:18px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.heard.err{ color:#ffb3e6; white-space:normal; }
+select{ background:var(--ink); border:1px solid var(--line); border-radius:999px; padding:4px 10px; font-size:14px; }
+.guide{ position:fixed; left:0; right:0; top:38%; border-top:2px solid rgba(105,232,255,.35); pointer-events:none; }
+</style></head><body>
+<section id="setup">
+  <h1>Neon News Prompter</h1>
+  <p>Paste this week's script, or share it to Neon Prompter from another app, then open the prompter. The script stays here until you replace it.</p>
+  <textarea id="src" placeholder="Paste the script here"></textarea>
+  <div class="row"><button class="btn" id="openBtn">Open prompter</button></div>
+</section>
+<div class="prompter" id="prompter" hidden>
+  <div class="pctl">
+    <button class="btn ghost" id="voiceBtn" aria-pressed="false">Follow my voice</button>
+    <select id="pLang" aria-label="Speech language"><option value="en-PH" selected>English (Philippines)</option><option value="en-US">English (US)</option><option value="en-GB">English (UK)</option></select>
+    <button class="btn" id="pPlay">Start</button>
+    <button class="btn ghost" id="pTop">Back to top</button>
+    <label>Speed <input type="range" id="pSpeed" min="10" max="160" value="45"></label>
+    <label>Size <input type="range" id="pSize" min="28" max="96" value="52"></label>
+    <span style="color:var(--muted)">Space starts and pauses. Click a word to jump there.</span>
+    <button class="btn ghost" id="pClose" style="margin-left:auto">Edit script</button>
+    <div class="heard" id="heard"></div>
+  </div>
+  <div id="pscroll"><div id="ptext"></div></div>
+  <div class="guide"></div>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+function el(tag, cls, text){ const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+try { $("src").value = localStorage.getItem("nn-script") || ""; } catch(e){}
+$("src").addEventListener("input", () => { try { localStorage.setItem("nn-script", $("src").value); } catch(e){} });
+let playing = false, last = 0, carry = 0;
+$("openBtn").onclick = () => openPrompter();
+function openPrompter(){
+  const txt = $("src").value.trim();
+  const p = $("ptext"); p.replaceChildren(); pwords = []; vpos = 0; shownPos = -1;
+  if (!txt){ p.append(el("span", null, "No script for this week yet.")); }
+  const heads = new Set(["Cold Open","Opening","Sign-off","Around the industry","Top Story","New Releases","Live Sessions","Label Watch","Off the Majors","World Stage","Asia Bridge","One to Listen To","Showbiz Corner"]);
+  txt.split("\n").forEach(line => {
+    const raw = line.replace(/\*\*/g, "");
+    if (heads.has(raw.trim())){ p.append(el("span", "h", raw.trim())); return; }
+    raw.split(/(\s+)/).forEach(part => {
+      if (!part) return;
+      if (/^\s+$/.test(part)){ p.append(document.createTextNode(part)); return; }
+      const sp = el("span", "w", part);
+      const n = normWord(part);
+      if (n){ sp.dataset.i = pwords.length; pwords.push({n, el:sp}); }
+      p.append(sp);
+    });
+    p.append(document.createTextNode("\n"));
+  });
+  p.style.fontSize = $("pSize").value + "px";
+  $("setup").hidden = true; $("prompter").hidden = false; $("pscroll").scrollTop = 0; $("pPlay").focus();
+  markPos(0, false);
+}
+let pwords = [], vpos = 0, shownPos = -1;
+const normWord = w => w.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]/g, "");
+function step(ts){
+  if (!playing) return;
+  if (last){ carry += (ts - last) / 1000 * Number($("pSpeed").value); const px = Math.floor(carry); if (px){ $("pscroll").scrollTop += px; carry -= px; } }
+  last = ts; requestAnimationFrame(step);
+}
+function togglePlay(){ if (!playing && listening) stopVoice(); playing = !playing; $("pPlay").textContent = playing ? "Pause" : "Start"; last = 0; carry = 0; if (playing) requestAnimationFrame(step); }
+
+/* voice follow */
+const STOP = new Set("the a an and or but of to in on at for with by from is are was were be been it its this that these those you your i we our they their he she his her him them me my as so if not no yes up out about into over just also then than there here what who how when where which will would can could do does did have has had one two all more".split(" "));
+function lev1(a, b){
+  if (Math.abs(a.length - b.length) > 1) return false;
+  let i = 0, j = 0, d = 0;
+  while (i < a.length && j < b.length){
+    if (a[i] === b[j]){ i++; j++; continue; }
+    if (++d > 1) return false;
+    if (a.length > b.length) i++; else if (b.length > a.length) j++; else { i++; j++; }
+  }
+  return d + (a.length - i) + (b.length - j) <= 1;
+}
+function similar(a, b){
+  if (a === b) return true;
+  if (a.length >= 5 && b.length >= 5) return a.slice(0, 5) === b.slice(0, 5) || lev1(a, b);
+  return false;
+}
+function markPos(i, scroll){
+  i = Math.max(0, Math.min(i, pwords.length));
+  const from = Math.min(i, shownPos < 0 ? 0 : shownPos), to = Math.max(i, shownPos < 0 ? pwords.length : shownPos);
+  for (let k = from; k < Math.min(to + 1, pwords.length); k++){ pwords[k].el.classList.toggle("read", k < i); pwords[k].el.classList.remove("cur"); }
+  if (i < pwords.length) pwords[i].el.classList.add("cur");
+  shownPos = i; vpos = i;
+  if (scroll === false || i >= pwords.length) return;
+  const box = $("pscroll"), r = pwords[i].el.getBoundingClientRect();
+  const fs = Number($("pSize").value);
+  const delta = r.top - window.innerHeight * 0.38 + fs * 0.6;
+  if (Math.abs(delta) > fs * 0.4) box.scrollTo({top: box.scrollTop + delta, behavior: "smooth"});
+}
+function scoreAt(start, tail){
+  let j = start, hits = 0, content = 0, lastHit = -1;
+  const end = Math.min(pwords.length, start + tail.length + 2);
+  for (const t of tail){
+    for (let k = j; k < end; k++){
+      if (similar(t, pwords[k].n)){ hits++; if (!STOP.has(t)) content++; lastHit = k; j = k + 1; break; }
+    }
+  }
+  return {hits, content, lastHit};
+}
+let pending = null, pendingKey = "";
+function locate(tail){
+  const k = tail.length;
+  if (k < 3 || !pwords.length) return;
+  const need = Math.max(3, Math.ceil(k * 0.65));
+  const from = Math.max(0, vpos - 8), to = Math.min(pwords.length - 1, vpos + 25);
+  let best = null;
+  for (let s = from; s <= to; s++){
+    const r = scoreAt(s, tail);
+    if (r.hits < need || r.content < 2) continue;
+    const target = r.lastHit + 1;
+    const score = r.hits + r.content * 0.5 - Math.abs(target - vpos) * 0.04;
+    if (!best || score > best.score) best = Object.assign({target, score}, r);
+  }
+  if (best){
+    pending = null;
+    if (best.target < vpos - 1 && best.content < 3) return;
+    if (best.target !== vpos) markPos(best.target, true);
+    return;
+  }
+  if (k < 6) return;
+  const t6 = tail.slice(-6), key = t6.join(" ");
+  for (let s = 0; s + 6 <= pwords.length; s++){
+    if (s >= from - 6 && s <= to) continue;
+    let ok = 0, content = 0;
+    for (let m = 0; m < 6; m++){ if (similar(t6[m], pwords[s + m].n)){ ok++; if (!STOP.has(t6[m])) content++; } }
+    if (ok >= 5 && content >= 3){
+      const target = s + 6;
+      if (pending != null && Math.abs(pending - target) <= 8 && key !== pendingKey){ pending = null; markPos(target, true); }
+      else { pending = target; pendingKey = key; }
+      return;
+    }
+  }
+}
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, listening = false, finalWords = [];
+function setHeard(msg, isErr){ $("heard").textContent = msg; $("heard").classList.toggle("err", !!isErr); }
+function stopVoice(){
+  listening = false; $("voiceBtn").setAttribute("aria-pressed", "false"); $("voiceBtn").textContent = "Follow my voice";
+  if (NATIVE){ NATIVE.stop(); return; }
+  if (rec){ try { rec.stop(); } catch(e){} }
+}
+const NATIVE = window.NNAndroid || null;
+function feed(finalText, interim){
+  if (finalText) finalWords = finalWords.concat(finalText.split(/\s+/).map(normWord).filter(Boolean)).slice(-14);
+  const tail = finalWords.concat((interim || "").split(/\s+/).map(normWord).filter(Boolean)).slice(-6);
+  if (!tail.length) return;
+  setHeard("Heard: " + tail.join(" "));
+  locate(tail);
+}
+window.nnVoice = (kind, text) => {
+  if (kind === "partial") feed("", text);
+  else if (kind === "final") feed(text, "");
+  else if (kind === "status") setHeard(text);
+  else if (kind === "error"){ setHeard(text, true); stopVoice(); }
+};
+function startVoice(){
+  if (NATIVE){
+    if (playing) togglePlay();
+    finalWords = [];
+    listening = true; $("voiceBtn").setAttribute("aria-pressed", "true"); $("voiceBtn").textContent = "Listening";
+    setHeard("Starting the microphone...");
+    NATIVE.start();
+    return;
+  }
+  if (!SR){ setHeard("This browser has no speech recognition. Use Chrome.", true); return; }
+  if (playing) togglePlay();
+  rec = new SR();
+  rec.lang = $("pLang").value; rec.continuous = true; rec.interimResults = true;
+  finalWords = [];
+  rec.onresult = e => {
+    let interim = "";
+    for (let r = e.resultIndex; r < e.results.length; r++){
+      const t = e.results[r][0].transcript;
+      if (e.results[r].isFinal) finalWords = finalWords.concat(t.split(/\s+/).map(normWord).filter(Boolean)).slice(-14);
+      else interim += " " + t;
+    }
+    const tail = finalWords.concat(interim.split(/\s+/).map(normWord).filter(Boolean)).slice(-6);
+    setHeard("Heard: " + tail.join(" "));
+    locate(tail);
+  };
+  rec.onerror = e => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed"){ setHeard("No microphone access. Chrome blocked it for this page, so voice follow can't run here.", true); stopVoice(); }
+    else if (e.error === "audio-capture"){ setHeard("No microphone found. Check that the Yeti is connected and selected in Chrome.", true); stopVoice(); }
+    else if (e.error === "network"){ setHeard("Speech recognition lost its connection. Click Follow my voice again.", true); stopVoice(); }
+  };
+  rec.onend = () => { if (listening){ try { rec.start(); } catch(e){} } };
+  try { rec.start(); listening = true; $("voiceBtn").setAttribute("aria-pressed", "true"); $("voiceBtn").textContent = "Listening"; setHeard("Listening. Start reading."); }
+  catch(e){ setHeard("Could not start the microphone.", true); }
+}
+$("voiceBtn").onclick = () => listening ? stopVoice() : startVoice();
+if (NATIVE) $("pLang").hidden = true;
+try { const L = localStorage.getItem("nn-lang"); if (L) $("pLang").value = L; } catch(e){}
+$("pLang").onchange = () => { try { localStorage.setItem("nn-lang", $("pLang").value); } catch(e){} if (listening){ stopVoice(); startVoice(); } };
+$("ptext").addEventListener("click", e => { const i = e.target.dataset && e.target.dataset.i; if (i != null){ finalWords = []; markPos(Number(i), true); } });
+
+
+$("pPlay").onclick = togglePlay;
+$("pTop").onclick = () => { $("pscroll").scrollTop = 0; markPos(0, false); };
+$("pSize").oninput = () => { $("ptext").style.fontSize = $("pSize").value + "px"; markPos(vpos, true); };
+$("pClose").onclick = () => { stopVoice(); setHeard(""); playing = false; $("pPlay").textContent = "Start"; $("prompter").hidden = true; $("setup").hidden = false; };
+document.addEventListener("keydown", e => {
+  if ($("prompter").hidden) return;
+  if (e.code === "Space"){ e.preventDefault(); togglePlay(); }
+});
+
+async function loadFromHash(){
+  const h = location.hash.slice(1);
+  if (!h) return null;
+  const params = new URLSearchParams(h);
+  try {
+    if (params.get("z")){
+      const b64 = params.get("z").replace(/-/g, "+").replace(/_/g, "/");
+      const bin = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+      const ds = new Blob([bin]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+      return await new Response(ds).text();
+    }
+    if (params.get("t")) return params.get("t");
+  } catch(e){ return null; }
+  return null;
+}
+loadFromHash().then(txt => {
+  if (!txt) return;
+  $("src").value = txt;
+  try { localStorage.setItem("nn-script", txt); } catch(e){}
+  history.replaceState(null, "", location.pathname);
+  openPrompter();
+});
+window.nnLoadScript = txt => { $("src").value = txt; try { localStorage.setItem("nn-script", txt); } catch(e){} stopVoice(); setHeard(""); playing = false; $("pPlay").textContent = "Start"; openPrompter(); };
+window.nnBack = () => { if ($("prompter").hidden) return false; $("pClose").click(); return true; };
+const NN_PRELOAD = /*__NN_PRELOAD__*/null;
+if (NN_PRELOAD){ $("src").value = NN_PRELOAD; try { localStorage.setItem("nn-script", NN_PRELOAD); } catch(e){} openPrompter(); }
+</script></body></html>
