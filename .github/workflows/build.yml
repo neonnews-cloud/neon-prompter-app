@@ -1,0 +1,43 @@
+name: Build APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Download offline speech model
+        run: |
+          curl -L --fail -o app/src/main/assets/model.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          ls -lh app/src/main/assets/
+
+      - name: Build
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk NeonPrompter.apk
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Neon Prompter build ${{ github.run_number }}
+          make_latest: true
+          files: NeonPrompter.apk
